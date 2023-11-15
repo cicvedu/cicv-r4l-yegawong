@@ -163,4 +163,18 @@ config SAMPLE_RUST_SELFTESTS
 
 	  If unsure, say N.
 
+
+config SAMPLE_RUST_HELLOWORLD
+	tristate "Print Helloworld in Rust(NEW)"
+	help
+		This option builds the self helloworld cases for Rust.
+		
+		If unsure, say N
+
+config SAMPLE_RUST_CHRDEV
+        tristate "CHRDEV in Rust(NEW)"
+        help
+                This option builds the i/o /dev/cicv cases for Rust.
+
+                If unsure, say N
 endif # SAMPLES_RUST

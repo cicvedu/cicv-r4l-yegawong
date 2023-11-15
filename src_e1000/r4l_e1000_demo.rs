@@ -13,7 +13,8 @@ use kernel::sync::Arc;
 use kernel::{pci, device, driver, bindings, net, dma, c_str};
 use kernel::device::RawDevice;
 use kernel::sync::SpinLock;
-
+// use kernel::sync::Mutex;
+// use kernel::driver::DeviceRemoval;
 
 
 mod consts;
@@ -191,6 +192,16 @@ impl net::DeviceOperations for NetDevice {
 
     fn stop(_dev: &net::Device, _data: &NetDevicePrvData) -> Result {
         pr_info!("Rust for linux e1000 driver demo (net device stop)\n");
+        
+        Self::e1000_recycle_tx_queue(&_dev, &_data);
+        let irq_handler_ptr = _data._irq_handler.load(core::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            Box::from_raw(irq_handler_ptr);
+        }
+
+        _dev.netif_stop_queue();
+        _dev.netif_carrier_off();
+        _data.napi.schedule();
         Ok(())
     }
 
@@ -293,11 +304,24 @@ impl kernel::irq::Handler for E1000InterruptHandler {
 /// the private data for the adapter
 struct E1000DrvPrvData {
     _netdev_reg: net::Registration<NetDevice>,
+    bars: i32,
+    irq: u32,
+    dev_ptr: *mut bindings::pci_dev,
 }
+unsafe impl Send for E1000DrvPrvData {}
+unsafe impl Sync for E1000DrvPrvData {}
 
 impl driver::DeviceRemoval for E1000DrvPrvData {
+    // extern "C" fn remove_callback(...) -> core::ffi::c_int {
+    //     T::remove(&data);
+    //     <T::Data as driver::DeviceRemoval>::device_remove(&data);
+    // }
     fn device_remove(&self) {
         pr_info!("Rust for linux e1000 driver demo (device_remove)\n");
+        let netdev = self._netdev_reg.dev_get();
+        netdev.netif_carrier_off();
+        netdev.netif_stop_queue();
+        drop(&self._netdev_reg);
     }
 }
 
@@ -462,12 +486,23 @@ impl pci::Driver for E1000Drv {
             E1000DrvPrvData{
                 // Must hold this registration, or the device will be removed.
                 _netdev_reg: netdev_reg,
+                bars: bars,
+                irq: irq,
+                dev_ptr: dev.to_ptr(),
             }
         )?)
     }
 
     fn remove(data: &Self::Data) {
         pr_info!("Rust for linux e1000 driver demo (remove)\n");
+        let bars = data.bars;
+        let dev_ptr = data.dev_ptr;
+        unsafe {
+            bindings::pci_clear_master(dev_ptr);
+            bindings::pci_release_selected_regions(dev_ptr, bars);
+            bindings::pci_disable_device(dev_ptr);
+        };
+        drop(data);
     }
 }
 struct E1000KernelMod {
